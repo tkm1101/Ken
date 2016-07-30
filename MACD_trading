@@ -1,0 +1,94 @@
+import pandas as pd
+import oandapy
+import os
+import numpy as np
+
+account_number=os.getenv("account_number")
+access_token=os.getenv("access_token")
+
+
+while True:
+
+    
+    
+    oanda = oandapy.API(environment="practice" , access_token=access_token)
+    response = oanda.get_history(instrument="EUR_USD",
+                                      granularity='S5',
+                                      count = 5000)
+    
+    df2=pd.DataFrame(data=response['candles'],index=None)
+    
+    
+
+    df_midclose=pd.DataFrame(data=(df2['closeAsk']+df2['closeBid'])/2,columns=['MidClose'])
+
+    def MACD(df,m,n,k):
+        diff=df.ewm(span=m).mean()-df.ewm(span=n).mean()
+        dea=diff.ewm(span=k).mean()
+        macd=diff-dea
+        
+        return macd
+
+    result=MACD(df_midclose['MidClose'],12,26,9)
+    
+    ratio=result/df_midclose['MidClose']
+
+    MEAN=np.mean(ratio)
+    STD=np.std(ratio)
+    lower=MEAN-3*STD
+    upper=MEAN+3*STD
+    long_close=MEAN-0.5*STD
+    short_close=MEAN+0.5*STD
+    
+    def invested():
+        trade_status=oanda.get_trades(account_id=account_number)
+        return trade_status['trades']
+    
+    
+    def Bollinger_Band(df,n):
+        Middle=df['MidClose'].rolling(window=n).mean()
+        Upper=Middle+1.96*df['MidClose'].rolling(window=n).std()
+        Lower=Middle-1.96*df['MidClose'].rolling(window=n).std()
+    
+        df1=pd.DataFrame(data=Middle)
+        df2=pd.DataFrame(data=Upper)
+        df3=pd.DataFrame(data=Lower)
+    
+        df_Middle=df1.rename(columns={'MidClose':'Middle'})
+        df_Upper=df2.rename(columns={'MidClose':'Upper'})
+        df_Lower=df3.rename(columns={'MidClose':'Lower'})
+        
+        df=pd.concat([df_Middle,df_Upper,df_Lower],axis=1)
+    
+    
+        return df 
+    
+    long_take=Bollinger_Band(df_midclose,20)['Upper'][4999]
+    short_take=Bollinger_Band(df_midclose,20)['Lower'][4999]
+    middle=Bollinger_Band(df_midclose,20)['Middle'][4999]
+    #live_market=oanda.get_prices(instruments='EUR_USD')
+    #live_mid=(live_market['prices'][0]['ask']+live_market['prices'][0]['bid'])/2
+    
+    
+    if ratio[4999]<0:
+        if ratio[4999]<lower and invested()==[]:
+            oanda.create_order(account_id=account_number,
+                              instrument='EUR_USD',
+                              units=20000,
+                              side='buy',
+                              takeProfit=round(long_take,5) if df_midclose['MidClose'][4999]>middle else round(middle,5),
+                              type='market')
+        elif ratio[4999]>long_close and invested()!=[]:
+            oanda.close_position(account_id=account_number,instrument="EUR_USD")
+    elif ratio[4999]>0:
+        if ratio[4999]>upper and invested()==[]:
+            oanda.create_order(account_id=account_number,
+                              instrument='EUR_USD',
+                              units=20000,
+                              side='sell',
+                              takeProfit=round(short_take,5) if df_midclose['MidClose'][4999]<middle else round(middle,5),
+                              type='market')
+        elif ratio[4999]<short_close and invested()!=[]:
+            oanda.close_position(account_id=account_number,instrument="EUR_USD")
+            
+            
